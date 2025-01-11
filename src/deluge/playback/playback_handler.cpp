@@ -940,6 +940,12 @@ doMetronome:
 					uint32_t phaseIncrement =
 					    ((currentMetronomeTick % (swungTicksPerQuarterNote << 2)) == 0) ? 128411753 : 50960238;
 					AudioEngine::metronome.trigger(phaseIncrement);
+D_PRINTLN(",Metronome,%f,%c,%lld,%ld"
+	, (float)(AudioEngine::audioSampleTimer / 44100.0)
+	, (char)((currentMetronomeTick % (currentSong->getQuarterNoteLength() << 2)) == 0) ? 'H' : 'L'
+	, (int64_t)(lastSwungTickActioned)
+	, (int32_t)(swungTicksTilNextEvent)
+);
 				}
 
 				int32_t ticksIntoCurrentBeep = currentMetronomeTick % swungTicksPerQuarterNote;
@@ -2018,9 +2024,8 @@ void PlaybackHandler::commandNudgeClock(int8_t offset) {
 			}
 		}
 		else {
-			// Nothing to nudge? TODO: Should we instead nudge the internal clock? Could be
-			// useful for manual beat syncs.
-			return;
+			// Note this will only occur when sending MIDI Output Clock ticks, which is default
+			currentSong->nudgeTimerTicks(offset); // offset of zero nudges to current time
 		}
 	}
 	else if (isExternalClockActive()) {

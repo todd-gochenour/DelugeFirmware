@@ -281,6 +281,7 @@ public:
 	                 int32_t sideChainHitPending);
 	bool isYNoteAllowed(int32_t yNote, bool inKeyMode);
 	Clip* syncScalingClip;
+	void nudgeTimerTicks(int32_t numSteps = 0);  // 0 will nudge to current time
 	void setTimePerTimerTick(uint64_t newTimeBig, bool shouldLogAction = false);
 	bool hasAnySwing();
 	void resyncLFOs();

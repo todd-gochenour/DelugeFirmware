@@ -32,6 +32,7 @@
 #include "hid/led/indicator_leds.h"
 #include "hid/led/pad_leds.h"
 #include "hid/matrix/matrix_driver.h"
+#include "io/debug/log.h"
 #include "io/midi/device_specific/specific_midi_device.h"
 #include "io/midi/midi_engine.h"
 #include "memory/general_memory_allocator.h"
@@ -2472,8 +2473,78 @@ void Song::renderAudio(StereoSample* outputBuffer, int32_t numSamples, int32_t* 
 	}
 }
 
-void Song::setTimePerTimerTick(uint64_t newTimeBig, bool shouldLogAction) {
+// Shifts the timertick by +|-numSteps where steps is a 32nd note.
+// Use numSteps=0 to shift to current audioSampleTimer.
+void Song::nudgeTimerTicks(int32_t numSteps) {
+	if (currentSong != this || !playbackHandler.isInternalClockActive()) {
+		return;
+	}
+	int32_t timePer32ndNote = (int32_t)(timePerTimerTickBig >> 32) / 8;
+	int32_t timerTick = timePer32ndNote * numSteps;
+#if DEBUG_TIMERTICKS
+D_PRINTLN(",nudgeTimerTicks,%f,%f,%f,%f,%f,%f,%ld,%ld"
+, (float)(AudioEngine::audioSampleTimer / 44100.0) // using kSampleRate here causes float to be rounded to whole number
+, (float)(playbackHandler.timeLastTimerTickBig / 4294967296 / 44100.0)
+, (float)(playbackHandler.timeNextTimerTickBig / 4294967296 / 44100.0)
+, (float)((uint32_t)(AudioEngine::audioSampleTimer - (uint32_t)(playbackHandler.timeLastTimerTickBig >> 32)) / 44100.0)
+, (float)((uint32_t)((uint32_t)(playbackHandler.timeNextTimerTickBig >> 32) - AudioEngine::audioSampleTimer) / 44100.0)
+, (float)(timePerTimerTickBig / 4294967296 / 44100.0)
+, numSteps
+, timerTick
+);
+#endif
+	if(numSteps == 0) {
+		uint32_t timeSinceLastTimerTick = AudioEngine::audioSampleTimer
+			- (uint32_t)(playbackHandler.timeLastTimerTickBig >> 32);
+		uint32_t timeTilNextTimerTick = (uint32_t)(playbackHandler.timeNextTimerTickBig >> 32)
+			- AudioEngine::audioSampleTimer;
+		// Adjust time window forward or backward to sync with the downbeat
+		if(timeSinceLastTimerTick <= timeTilNextTimerTick) {
+			timeTilNextTimerTick = timeTilNextTimerTick - timeSinceLastTimerTick;
+			timeSinceLastTimerTick = 0;
+		} else {
+			timeSinceLastTimerTick = timeSinceLastTimerTick + timeTilNextTimerTick;
+			timeTilNextTimerTick = 0;
+		}
+		playbackHandler.timeLastTimerTickBig = (uint64_t)(AudioEngine::audioSampleTimer
+			- timeSinceLastTimerTick) << 32;
+		playbackHandler.timeNextTimerTickBig = (uint64_t)(AudioEngine::audioSampleTimer
+			+ timeTilNextTimerTick) << 32;
+#if DEBUG_TIMERTICKS
+D_PRINTLN(",nudgeTimerTicks,%f,%f,%f,%f,%f"
+, (float)(AudioEngine::audioSampleTimer / 44100.0) // using kSampleRate here causes float to be rounded to whole number
+, (float)(playbackHandler.timeLastTimerTickBig / 4294967296 / 44100.0)
+, (float)(playbackHandler.timeNextTimerTickBig / 4294967296 / 44100.0)
+, (float)timeSinceLastTimerTick / 44100.0
+, (float)timeTilNextTimerTick / 44100.0
+);
+#endif
+	} else {
+		playbackHandler.timeLastTimerTickBig = (uint64_t)((uint32_t)(playbackHandler.timeLastTimerTickBig >> 32) + timerTick) << 32;
+		playbackHandler.timeNextTimerTickBig = (uint64_t)((uint32_t)(playbackHandler.timeNextTimerTickBig >> 32) + timerTick) << 32;
+#if DEBUG_TIMERTICKS
+D_PRINTLN(",nudgeTimerTicks,%f,%f,%f,%ld,%ld"
+, (float)(AudioEngine::audioSampleTimer / 44100.0) // using kSampleRate here causes float to be rounded to whole number
+, (float)(playbackHandler.timeLastTimerTickBig / 4294967296 / 44100.0)
+, (float)(playbackHandler.timeNextTimerTickBig / 4294967296 / 44100.0)
+, numSteps
+, timerTick
+);
+#endif
+	}
+	// Reschedule upcoming swung, MIDI and trigger clock out ticks
+	if (currentSong == this && playbackHandler.isInternalClockActive()) {
+		playbackHandler.scheduleSwungTickFromInternalClock();
+		if (cvEngine.isTriggerClockOutputEnabled()) {
+			playbackHandler.scheduleTriggerClockOutTick();
+		}
+		if (playbackHandler.currentlySendingMIDIOutputClocks()) {
+			playbackHandler.scheduleMIDIClockOutTick();
+		}
+	}
+}
 
+void Song::setTimePerTimerTick(uint64_t newTimeBig, bool shouldLogAction) {
 	if (shouldLogAction) {
 		actionLogger.recordTempoChange(timePerTimerTickBig, newTimeBig);
 	}
